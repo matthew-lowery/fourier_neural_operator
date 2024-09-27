@@ -177,20 +177,7 @@ t1 = default_timer()
 # load data
 ################################################################
 
-# reader = MatReader(TRAIN_PATH)
-# train_a = reader.read_field('u')[:ntrain,::sub,::sub,:T_in]
-# train_u = reader.read_field('u')[:ntrain,::sub,::sub,T_in:T+T_in]
-
-# reader = MatReader(TEST_PATH)
-# test_a = reader.read_field('u')[-ntest:,::sub,::sub,:T_in]
-# test_u = reader.read_field('u')[-ntest:,::sub,::sub,T_in:T+T_in]
-
-# print(train_u.shape)
-# print(test_u.shape)
-# assert (S == train_u.shape[-2])
-# assert (T == train_u.shape[-1])
 data = np.load('./diffrec_3d_fno_res_1000.npz')
-S = T_in = T = 10
 a,u,a_grid,u_grid= data['x'], data['y'], data['x_grid'], data['y_grid']
 in_og_grid_mask = data['in_og_grid_mask']
 
@@ -199,8 +186,8 @@ a = np.concatenate((a,
                     axis=-1)
 
 a,u = torch.tensor(a.squeeze(),dtype=torch.float32),torch.tensor(u.squeeze(),dtype=torch.float32) 
-a = a.transpose(3,0,1,2)
-u = u.transpose(3,0,1,2)
+a = a.transpose(0,4,1,2,3) ### batch, x,y,z, channels -> batch, channels, x,y,z
+u = u.transpose(0,4,1,2,3)
 train_a,test_a = torch.split(a, [1000,200])
 train_u,test_u = torch.split(u, [1000,200])
 a_normalizer = UnitGaussianNormalizer(train_a)

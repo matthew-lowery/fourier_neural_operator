@@ -22,13 +22,19 @@ activation = F.relu
 # 3d fourier layers
 ################################################################
 
-def compl_mul3d(a, b):
-    # (batch, in_channel, x,y,t ), (in_channel, out_channel, x,y,t) -> (batch, out_channel, x,y,t)
-    op = partial(torch.einsum, "bixyz,ioxyz->boxyz")
-    return torch.stack([
-        op(a[..., 0], b[..., 0]) - op(a[..., 1], b[..., 1]),
-        op(a[..., 1], b[..., 0]) + op(a[..., 0], b[..., 1])
-    ], dim=-1)
+# def compl_mul3d(a, b):
+#     # (batch, in_channel, x,y,t ), (in_channel, out_channel, x,y,t) -> (batch, out_channel, x,y,t)
+#     op = partial(torch.einsum, "bixyz,ioxyz->boxyz")
+#     return torch.stack([
+#         op(a[..., 0], b[..., 0]) - op(a[..., 1], b[..., 1]),
+#         op(a[..., 1], b[..., 0]) + op(a[..., 0], b[..., 1])
+#     ], dim=-1)
+
+# Complex multiplication
+def compl_mul3d(input, weights):
+    # (batch, in_channel, x,y ), (in_channel, out_channel, x,y) -> (batch, out_channel, x,y)
+    return torch.einsum("bixyz,ioxyz->boxyz", input, weights)
+    
 
 class SpectralConv3d_fast(nn.Module):
     def __init__(self, in_channels, out_channels, modes1, modes2, modes3):
@@ -40,18 +46,19 @@ class SpectralConv3d_fast(nn.Module):
         self.modes3 = modes3
 
         self.scale = (1 / (in_channels * out_channels))
-        self.weights1 = nn.Parameter(self.scale * torch.rand(in_channels, out_channels, self.modes1, self.modes2, self.modes3, 2))
-        self.weights2 = nn.Parameter(self.scale * torch.rand(in_channels, out_channels, self.modes1, self.modes2, self.modes3, 2))
-        self.weights3 = nn.Parameter(self.scale * torch.rand(in_channels, out_channels, self.modes1, self.modes2, self.modes3, 2))
-        self.weights4 = nn.Parameter(self.scale * torch.rand(in_channels, out_channels, self.modes1, self.modes2, self.modes3, 2))
+        self.weights1 = nn.Parameter(self.scale * torch.rand(in_channels, out_channels, self.modes1, self.modes2, self.modes3,), dtype=torch.cfloat)
+        self.weights2 = nn.Parameter(self.scale * torch.rand(in_channels, out_channels, self.modes1, self.modes2, self.modes3,), dtype=torch.cfloat)
+        self.weights3 = nn.Parameter(self.scale * torch.rand(in_channels, out_channels, self.modes1, self.modes2, self.modes3,), dtype=torch.cfloat)
+        self.weights4 = nn.Parameter(self.scale * torch.rand(in_channels, out_channels, self.modes1, self.modes2, self.modes3,), dtype=torch.cfloat)
+
 
     def forward(self, x):
         batchsize = x.shape[0]
         #Compute Fourier coeffcients up to factor of e^(- something constant)
-        x_ft = torch.rfft(x, 3, normalized=True, onesided=True)
+        x_ft = torch.rfftn(x, dim=(-3,-2,-1))
 
         # Multiply relevant Fourier modes
-        out_ft = torch.zeros(batchsize, self.in_channels, x.size(-3), x.size(-2), x.size(-1)//2 + 1, 2, device=x.device)
+        out_ft = torch.zeros(batchsize, self.in_channels, x.size(-3), x.size(-2), x.size(-1)//2 + 1, dtype=torch.cfloat, device=x.device)
         out_ft[:, :, :self.modes1, :self.modes2, :self.modes3] = \
             compl_mul3d(x_ft[:, :, :self.modes1, :self.modes2, :self.modes3], self.weights1)
         out_ft[:, :, -self.modes1:, :self.modes2, :self.modes3] = \
@@ -62,12 +69,14 @@ class SpectralConv3d_fast(nn.Module):
             compl_mul3d(x_ft[:, :, -self.modes1:, -self.modes2:, :self.modes3], self.weights4)
 
         #Return to physical space
-        x = torch.irfft(out_ft, 3, normalized=True, onesided=True, signal_sizes=(x.size(-3), x.size(-2), x.size(-1)))
+        x = torch.fft.irfftn(out_ft, 
+                             dim=(-3,-2,-1) 
+                             s=(x.size(-3), x.size(-2), x.size(-1)))
         return x
 
-class SimpleBlock2d(nn.Module):
+class SimpleBlock3d(nn.Module):
     def __init__(self, modes1, modes2, modes3, width):
-        super(SimpleBlock2d, self).__init__()
+        super(SimpleBlock3d, self).__init__()
 
         self.modes1 = modes1
         self.modes2 = modes2
@@ -122,11 +131,11 @@ class SimpleBlock2d(nn.Module):
         x = self.fc2(x)
         return x
 
-class Net2d(nn.Module):
+class Net3d(nn.Module):
     def __init__(self, modes, width):
-        super(Net2d, self).__init__()
+        super(Net3d, self).__init__()
 
-        self.conv1 = SimpleBlock2d(modes, modes, modes, width)
+        self.conv1 = SimpleBlock3d(modes, modes, modes, width)
 
 
     def forward(self, x):
@@ -176,27 +185,17 @@ t1 = default_timer()
 ################################################################
 # load data
 ################################################################
-
-# reader = MatReader(TRAIN_PATH)
-# train_a = reader.read_field('u')[:ntrain,::sub,::sub,:T_in]
-# train_u = reader.read_field('u')[:ntrain,::sub,::sub,T_in:T+T_in]
-
-# reader = MatReader(TEST_PATH)
-# test_a = reader.read_field('u')[-ntest:,::sub,::sub,:T_in]
-# test_u = reader.read_field('u')[-ntest:,::sub,::sub,T_in:T+T_in]
-
-# print(train_u.shape)
-# print(test_u.shape)
-# assert (S == train_u.shape[-2])
-# assert (T == train_u.shape[-1])
 data = np.load('./diffrec_3d_fno_res_1000.npz')
-S = T_in = T = 10
 a,u,a_grid,u_grid= data['x'], data['y'], data['x_grid'], data['y_grid']
 in_og_grid_mask = data['in_og_grid_mask']
-a,u = torch.tensor(a.squeeze()),torch.tensor(u.squeeze())
-train_a,test_a = np.split(a, [1000,])
-train_u,test_u = np.split(u, [1000,])
 
+a = np.concatenate((a,
+                    a_grid[None].repeat(len(a),axis=0)), 
+                    axis=-1)
+
+a,u = torch.tensor(a.squeeze(),dtype=torch.float32),torch.tensor(u.squeeze(),dtype=torch.float32) 
+train_a,test_a = torch.split(a, [1000,200])
+train_u,test_u = torch.split(u, [1000,200])
 a_normalizer = UnitGaussianNormalizer(train_a)
 train_a = a_normalizer.encode(train_a)
 test_a = a_normalizer.encode(test_a)
@@ -204,21 +203,6 @@ test_a = a_normalizer.encode(test_a)
 y_normalizer = UnitGaussianNormalizer(train_u)
 train_u = y_normalizer.encode(train_u)
 
-train_a = train_a.reshape(ntrain,S,S,1,T_in).repeat([1,1,1,T,1])
-test_a = test_a.reshape(ntest,S,S,1,T_in).repeat([1,1,1,T,1])
-
-# pad locations (x,y,t)
-gridx = torch.tensor(np.linspace(0, 1, S), dtype=torch.float)
-gridx = gridx.reshape(1, S, 1, 1, 1).repeat([1, 1, S, T, 1])
-gridy = torch.tensor(np.linspace(0, 1, S), dtype=torch.float)
-gridy = gridy.reshape(1, 1, S, 1, 1).repeat([1, S, 1, T, 1])
-gridt = torch.tensor(np.linspace(0, 1, T+1)[1:], dtype=torch.float)
-gridt = gridt.reshape(1, 1, 1, T, 1).repeat([1, S, S, 1, 1])
-
-train_a = torch.cat((gridx.repeat([ntrain,1,1,1,1]), gridy.repeat([ntrain,1,1,1,1]),
-                       gridt.repeat([ntrain,1,1,1,1]), train_a), dim=-1)
-test_a = torch.cat((gridx.repeat([ntest,1,1,1,1]), gridy.repeat([ntest,1,1,1,1]),
-                       gridt.repeat([ntest,1,1,1,1]), test_a), dim=-1)
 
 train_loader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(train_a, train_u), batch_size=batch_size, shuffle=True)
 test_loader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(test_a, test_u), batch_size=batch_size, shuffle=False)
@@ -231,7 +215,7 @@ device = torch.device('cuda')
 ################################################################
 # training and evaluation
 ################################################################
-model = Net2d(modes, width).cuda()
+model = Net3d(modes, width).cuda()
 # model = torch.load('model/ns_fourier_V100_N1000_ep100_m8_w20')
 
 print(model.count_params())
