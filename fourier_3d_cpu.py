@@ -48,7 +48,7 @@ class SpectralConv3d_fast(nn.Module):
     def forward(self, x):
         batchsize = x.shape[0]
         #Compute Fourier coeffcients up to factor of e^(- something constant)
-        x_ft = torch.rfft(x, 3, normalized=True, onesided=True)
+        x_ft = torch.fft.rfft(x, 3, normalized=True, onesided=True)
 
         # Multiply relevant Fourier modes
         out_ft = torch.zeros(batchsize, self.in_channels, x.size(-3), x.size(-2), x.size(-1)//2 + 1, 2, device=x.device)
@@ -73,7 +73,7 @@ class SimpleBlock2d(nn.Module):
         self.modes2 = modes2
         self.modes3 = modes3
         self.width = width
-        self.fc0 = nn.Linear(13, self.width)
+        self.fc0 = nn.Linear(4, self.width)
 
         self.conv0 = SpectralConv3d_fast(self.width, self.width, self.modes1, self.modes2, self.modes3)
         self.conv1 = SpectralConv3d_fast(self.width, self.width, self.modes1, self.modes2, self.modes3)
@@ -193,10 +193,16 @@ data = np.load('./diffrec_3d_fno_res_1000.npz')
 S = T_in = T = 10
 a,u,a_grid,u_grid= data['x'], data['y'], data['x_grid'], data['y_grid']
 in_og_grid_mask = data['in_og_grid_mask']
-a,u = torch.tensor(a.squeeze()),torch.tensor(u.squeeze())
-train_a,test_a = np.split(a, [1000,])
-train_u,test_u = np.split(u, [1000,])
 
+a = np.concatenate((a,
+                    a_grid[None].repeat(len(a),axis=0)), 
+                    axis=-1)
+
+a,u = torch.tensor(a.squeeze(),dtype=torch.float32),torch.tensor(u.squeeze(),dtype=torch.float32) 
+a = a.transpose(3,0,1,2)
+u = u.transpose(3,0,1,2)
+train_a,test_a = torch.split(a, [1000,200])
+train_u,test_u = torch.split(u, [1000,200])
 a_normalizer = UnitGaussianNormalizer(train_a)
 train_a = a_normalizer.encode(train_a)
 test_a = a_normalizer.encode(test_a)
@@ -204,21 +210,6 @@ test_a = a_normalizer.encode(test_a)
 y_normalizer = UnitGaussianNormalizer(train_u)
 train_u = y_normalizer.encode(train_u)
 
-train_a = train_a.reshape(ntrain,S,S,1,T_in).repeat([1,1,1,T,1])
-test_a = test_a.reshape(ntest,S,S,1,T_in).repeat([1,1,1,T,1])
-
-# pad locations (x,y,t)
-gridx = torch.tensor(np.linspace(0, 1, S), dtype=torch.float)
-gridx = gridx.reshape(1, S, 1, 1, 1).repeat([1, 1, S, T, 1])
-gridy = torch.tensor(np.linspace(0, 1, S), dtype=torch.float)
-gridy = gridy.reshape(1, 1, S, 1, 1).repeat([1, S, 1, T, 1])
-gridt = torch.tensor(np.linspace(0, 1, T+1)[1:], dtype=torch.float)
-gridt = gridt.reshape(1, 1, 1, T, 1).repeat([1, S, S, 1, 1])
-
-train_a = torch.cat((gridx.repeat([ntrain,1,1,1,1]), gridy.repeat([ntrain,1,1,1,1]),
-                       gridt.repeat([ntrain,1,1,1,1]), train_a), dim=-1)
-test_a = torch.cat((gridx.repeat([ntest,1,1,1,1]), gridy.repeat([ntest,1,1,1,1]),
-                       gridt.repeat([ntest,1,1,1,1]), test_a), dim=-1)
 
 train_loader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(train_a, train_u), batch_size=batch_size, shuffle=True)
 test_loader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(test_a, test_u), batch_size=batch_size, shuffle=False)
@@ -226,12 +217,12 @@ test_loader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(test_a,
 t2 = default_timer()
 
 print('preprocessing finished, time used:', t2-t1)
-device = torch.device('cuda')
+device = torch.device('cpu')
 
 ################################################################
 # training and evaluation
 ################################################################
-model = Net2d(modes, width).cuda()
+model = Net2d(modes, width)
 # model = torch.load('model/ns_fourier_V100_N1000_ep100_m8_w20')
 
 print(model.count_params())
@@ -240,14 +231,14 @@ scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=scheduler_step,
 
 
 myloss = LpLoss(size_average=False)
-y_normalizer.cuda()
+y_normalizer
 for ep in range(epochs):
     model.train()
     t1 = default_timer()
     train_mse = 0
     train_l2 = 0
     for x, y in train_loader:
-        x, y = x.cuda(), y.cuda()
+        x, y = x, y
 
         optimizer.zero_grad()
         out = model(x)
@@ -271,7 +262,7 @@ for ep in range(epochs):
     test_l2 = 0.0
     with torch.no_grad():
         for x, y in test_loader:
-            x, y = x.cuda(), y.cuda()
+            x, y = x, y
 
             out = model(x)
             out = y_normalizer.decode(out)
@@ -292,7 +283,7 @@ test_loader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(test_a,
 with torch.no_grad():
     for x, y in test_loader:
         test_l2 = 0
-        x, y = x.cuda(), y.cuda()
+        x, y = x, y
 
         out = model(x)
         out = y_normalizer.decode(out)
