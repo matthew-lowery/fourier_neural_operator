@@ -46,16 +46,16 @@ class SpectralConv3d_fast(nn.Module):
         self.modes3 = modes3
 
         self.scale = (1 / (in_channels * out_channels))
-        self.weights1 = nn.Parameter(self.scale * torch.rand(in_channels, out_channels, self.modes1, self.modes2, self.modes3,), dtype=torch.cfloat)
-        self.weights2 = nn.Parameter(self.scale * torch.rand(in_channels, out_channels, self.modes1, self.modes2, self.modes3,), dtype=torch.cfloat)
-        self.weights3 = nn.Parameter(self.scale * torch.rand(in_channels, out_channels, self.modes1, self.modes2, self.modes3,), dtype=torch.cfloat)
-        self.weights4 = nn.Parameter(self.scale * torch.rand(in_channels, out_channels, self.modes1, self.modes2, self.modes3,), dtype=torch.cfloat)
+        self.weights1 = nn.Parameter(self.scale * torch.rand(in_channels, out_channels, self.modes1, self.modes2, self.modes3, dtype=torch.cfloat))
+        self.weights2 = nn.Parameter(self.scale * torch.rand(in_channels, out_channels, self.modes1, self.modes2, self.modes3, dtype=torch.cfloat))
+        self.weights3 = nn.Parameter(self.scale * torch.rand(in_channels, out_channels, self.modes1, self.modes2, self.modes3, dtype=torch.cfloat))
+        self.weights4 = nn.Parameter(self.scale * torch.rand(in_channels, out_channels, self.modes1, self.modes2, self.modes3, dtype=torch.cfloat))
 
 
     def forward(self, x):
         batchsize = x.shape[0]
         #Compute Fourier coeffcients up to factor of e^(- something constant)
-        x_ft = torch.rfftn(x, dim=(-3,-2,-1))
+        x_ft = torch.fft.rfftn(x, dim=(-3,-2,-1))
 
         # Multiply relevant Fourier modes
         out_ft = torch.zeros(batchsize, self.in_channels, x.size(-3), x.size(-2), x.size(-1)//2 + 1, dtype=torch.cfloat, device=x.device)
@@ -70,7 +70,7 @@ class SpectralConv3d_fast(nn.Module):
 
         #Return to physical space
         x = torch.fft.irfftn(out_ft, 
-                             dim=(-3,-2,-1) 
+                             dim=(-3,-2,-1),
                              s=(x.size(-3), x.size(-2), x.size(-1)))
         return x
 
@@ -82,7 +82,7 @@ class SimpleBlock3d(nn.Module):
         self.modes2 = modes2
         self.modes3 = modes3
         self.width = width
-        self.fc0 = nn.Linear(13, self.width)
+        self.fc0 = nn.Linear(4, self.width)
 
         self.conv0 = SpectralConv3d_fast(self.width, self.width, self.modes1, self.modes2, self.modes3)
         self.conv1 = SpectralConv3d_fast(self.width, self.width, self.modes1, self.modes2, self.modes3)
@@ -160,10 +160,10 @@ ntest = 200
 modes = 4
 width = 20
 
-batch_size = 10
+batch_size = 100
 batch_size2 = batch_size
 
-epochs = 10
+epochs = 1000
 learning_rate = 0.0025
 scheduler_step = 100
 scheduler_gamma = 0.5
@@ -187,7 +187,7 @@ t1 = default_timer()
 ################################################################
 data = np.load('./diffrec_3d_fno_res_1000.npz')
 a,u,a_grid,u_grid= data['x'], data['y'], data['x_grid'], data['y_grid']
-in_og_grid_mask = data['in_og_grid_mask']
+in_sphere = np.linalg.norm(a_grid, axis=-1) <= 1
 
 a = np.concatenate((a,
                     a_grid[None].repeat(len(a),axis=0)), 
@@ -235,14 +235,14 @@ for ep in range(epochs):
 
         optimizer.zero_grad()
         out = model(x)
-        print(out.shape)
+        # print(out.shape)
         ### mask offfffffffff
-        mse = F.mse_loss(out, y, reduction='mean')
+        mse = F.mse_loss(out[:,in_sphere], y[:,in_sphere], reduction='mean')
         # mse.backward()
 
         y = y_normalizer.decode(y)
         out = y_normalizer.decode(out)
-        l2 = myloss(out.view(batch_size, -1), y.view(batch_size, -1))
+        l2 = myloss(out[:,in_sphere].view(batch_size, -1), y[:,in_sphere].view(batch_size, -1))
         l2.backward()
 
         optimizer.step()
