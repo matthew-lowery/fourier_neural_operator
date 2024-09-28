@@ -185,7 +185,7 @@ t1 = default_timer()
 ################################################################
 # load data
 ################################################################
-data = np.load('./diffrec_3d_fno_res_1000.npz')
+data = np.load('.data/diffrec_3d_fno_res_1000.npz')
 a,u,a_grid,u_grid= data['x'], data['y'], data['x_grid'], data['y_grid']
 in_sphere = np.linalg.norm(a_grid, axis=-1) <= 1
 
